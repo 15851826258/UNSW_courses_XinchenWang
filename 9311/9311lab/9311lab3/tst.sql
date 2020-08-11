@@ -1,0 +1,1 @@
+insert into Hosts values (1769,'202.139.56.6',null);
