@@ -1,0 +1,271 @@
+# python version -- Python3
+import socket
+import sys
+import threading
+import time
+# transfer the message into bytes.
+import pickle
+
+ipaddress = "localhost"
+
+
+# for the DHT packet
+class DHT_packet():
+    def __init__(self, Seq, Acknowledegement, ACk, PING, FILE, quit, Data, condition, nextlist):
+        self.Seq = Seq
+        self.Acknowledegement = Acknowledegement
+        self.ACk = ACk
+        self.PING = PING
+        self.FILE = FILE
+        self.quit = quit
+        self.Data = Data
+        self.source_peer = int(sys.argv[1])  # 这个包来自哪里
+        self.condition = condition  # [1,n]代表上一个 [2,n]代表上上个
+        self.nextlist = nextlist
+
+
+class Peer_Class:
+    def __init__(self, peerId, successor1, successor2, MSS, drop_prob):
+        # 命令行五个入参先处理
+        self.peerId = peerId
+        self.successor1 = successor1
+        self.successor2 = successor2
+        self.MSS = MSS
+        self.drop_prob = drop_prob
+
+        # 根据题目要求把参数加上50000
+        self.current_port = self.peerId + 60000
+        self.successor1_port = self.successor1 + 60000
+        self.successor2_port = self.successor2 + 60000
+
+        # 下家 和 下下家 的列表
+        self.successor_list = []
+        self.successor_list.append(self.successor1)
+        self.successor_list.append(self.successor2)
+
+        # 记录下来上家
+        self.predecessor = None
+
+        # 记录上家和 上上家
+        self.predecessor_condition_list = []  # [1,n]代表上一个 [2,n]代表上上个
+        self.predecessor_1 = -1
+        self.predecessor_2 = -1
+
+        # 线程锁 用于log的写入
+        self.lock = threading.Lock()
+
+        # 初始化send_socket
+        self.send_UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # 初始化接收的recv_socket
+        self.receive_UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.receive_UDP_socket.bind(("", self.current_port))  # here "" is the local host
+        self.receive_UDP_socket.settimeout(11)
+
+        # ping 发送线程
+        ping_thread = threading.Thread(target=self.ping)
+        ping_thread.setDaemon(True)
+        ping_thread.start()
+
+        # UDP接收线程
+        recv_UDP_thread = threading.Thread(target=self.UDP_receive_function)
+        recv_UDP_thread.setDaemon(True)
+        recv_UDP_thread.start()
+
+        # start recv the TCP
+        recv_TCP_thread = threading.Thread(target=self.TCP_receive_function)
+        recv_TCP_thread.setDaemon(True)
+        recv_TCP_thread.start()
+
+        # wait for the input from keyboard
+        self.keyboard_input()
+
+    def pack_data(self, Seq, Acknowledegement, ACk, PING, FILE, quit, Data, condition, nextlist):
+        packet = DHT_packet(Seq, Acknowledegement, ACk, PING, FILE, quit, Data, condition, nextlist)
+        packet = pickle.dumps(packet)
+        return packet
+
+    def unpackt_data(self, packet):
+        return pickle.loads(packet)
+
+    def UDP_receive_function(self):
+        while True:
+            try:
+                message, senderAddress = self.receive_UDP_socket.recvfrom(2048)
+                message = self.unpackt_data(message)
+                if (message.PING == 1):
+                    # 需要有两个pred， 需要最小的（离得更近的那个pred）
+                    self.predecessor1 = message.source_peer
+                    self.predecessor_condition_list.append(message.condition)  # 列表中取出了最后两位就可以看到上家和上上家的情况
+
+                    message = message.Data
+                    print(message)
+
+                # 如果是文件的话，也要cheek是不是文件，是的话就返回。
+                # if message.FILE == 1
+                else:  # file return          TODO
+                    print('Not ping')
+            except Exception:
+                print('this peer dead, looking for successor')
+                # run the find_successor() function
+                break
+
+    def ping(self):
+        print('----------------------------------------------')
+        while True:
+            print('这是peer ' + str(self.peerId))
+            ping_msg = 'A ping request was received from peer' + str(self.peerId) + '.'
+            packet_1 = self.pack_data(0, 0, 0, 1, 0, 0, ping_msg, [1, self.peerId], [])
+            packet_2 = self.pack_data(0, 0, 0, 1, 0, 0, ping_msg, [2, self.peerId], [])
+            self.send_UDP_socket.sendto(packet_1, (ipaddress, self.successor1_port))
+            self.send_UDP_socket.sendto(packet_2, (ipaddress, self.successor2_port))
+            time.sleep(5)
+            # Test print
+            print('we are sending PING message to peer' + str(self.successor1))
+            print('we are sending PING message to peer' + str(self.successor2))
+            print('----------------------------------------------')
+
+    def TCP_receive_function(self):
+        init_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        init_socket.bind((ipaddress, self.current_port))
+        print(self.current_port)
+        init_socket.listen()
+        while True:
+            print('TCP received1')
+            connection_socket, addr = init_socket.accept()
+            print('tag')
+            data = connection_socket.recv(2048)
+            print('tag2')
+            message = self.unpackt_data(data)
+            try:
+                print('TCP received2')
+                if message.FILE == 1:  # file request from peer
+                    TCP_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    # evaluate if it is held at my location
+                    # base case also other cases.
+                    # TODO
+                    if self.peerId == message.Data:
+                        print('FILE found here ')
+                        print(f'A response message, destined for peer {message.source_peer},has been sent')
+                        # send fild here UDP
+                    else:  # forwarad the file to the next peer
+                        print('FILE is not held here')
+                        print('FILE request has been forward to my successor')
+                        TCP_socket.connect((ipaddress, self.successor1_port))
+                        #
+                        TCP_socket.send(data)
+                    TCP_socket.close()
+                # 收到了退出的信息
+                elif message.quit == 1:
+                    print('quit time')
+                    # quit the current successor, update the successors
+                    # message contains the current next successore.
+                    self.successor1 = message.Data
+                    self.successor2 = 100
+                    # self.successor1 = message.nextlist[0]
+                    self.successor1_port = self.successor1 + 60000
+                    self.successor2_port = self.successor2 + 60000
+                    shanchuliebiao = message.nextlist
+                    print(message.nextlist)
+                    # 需要更新两个successor， 这里目前只写了一个。
+                    # quit 之后重置计数器 使得pre重新计算
+                    if self.successor1 and self.successor2:
+                        print(f'my first successor is now peer {self.successor1}')
+                        print(f'my second successor is now peer {self.successor2}')
+            except ConnectionRefusedError:
+                print("Coundn't connect to peer, please check the successors update")
+            connection_socket.close()
+
+    def file_function(self, filename):
+        filehash = filename % 256
+        if not self.predecessor:
+            print('please wait for the predecessor update')
+        # check tbe file location
+        elif filehash == self.peerId:
+            ## TODO other file location
+            print(f'FILE {filename} is found here in peer {self.peerId}')
+        else:
+            try:
+                print(f'FILE {filename} was not stored here')
+                print('the FILE request has been sent to my successor')
+
+                packet = self.pack_data(0, 0, 0, 0, 1, 0, filehash)
+                TCP_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                TCP_socket.connect((ipaddress, self.successor1_port))
+                TCP_socket.send(packet)
+                TCP_socket.close()
+            except ConnectionRefusedError:
+                print("Could not connect to peer, please wait until peers update")
+                ###
+
+    def quit_function(self):
+        if self.predecessor == None:
+            time.sleep(11)
+        try:
+            print(f'Peer {self.peerId} will depart from the peers connection')
+            print('the pees update may takes a few seconds')
+            print('上家是' + str(self.predecessor_condition_list[-1]) + str(self.predecessor_condition_list[-2]))
+            # 上家
+            if self.predecessor_condition_list[-1][0] == 1:
+                predecessor1_quit = self.predecessor_condition_list[-1][1]
+
+            elif self.predecessor_condition_list[-2][0] == 1:
+                predecessor1_quit = self.predecessor_condition_list[-2][1]
+
+            # 上上家
+            if self.predecessor_condition_list[-1][0] == 2:
+                predecessor2_quit = self.predecessor_condition_list[-1][1]
+            elif self.predecessor_condition_list[-2][0] == 2:
+                predecessor2_quit = self.predecessor_condition_list[-2][1]
+            print('上家是 peer' + str(predecessor1_quit))
+            print('上上家是 peer' + str(predecessor2_quit))
+            print('下家是 ' + str(self.successor_list))
+            # packet 1 放了successor 的列表 装了 本次删除节点的 下家 和 下下家 发给上家
+            packet_1 = self.pack_data(0, 0, 0, 0, 0, 1, self.successor_list[0], self.successor_list)
+            print('sasaas')
+            # packet 2 放了successor 的列表 装了 本次删除节点的 下家 和 下下家 发给上上家
+            packet_2 = self.pack_data(0, 0, 0, 0, 0, 1, self.successor1, self.successor_list)
+            # 还需要告诉另外一个predecessor
+            # 创建TCP socket用来发送离开的信息
+            TCP_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # 发给上家
+            TCP_socket.connect((ipaddress, self.predecessor1_quit + 60000))
+            TCP_socket.send(packet_1)  # 第一个包
+            TCP_socket.close()
+            print('send_packt 1')
+            # 发给上上家
+            # TCP_socket.connect((ipaddress, self.predecessor2_quit + 60000))
+            # TCP_socket.send(packet_2)#第二个包
+            # TCP_socket.close()
+            sys.exit(0)
+        # 删到最后只剩下一个 报错
+        except(TypeError, ConnectionRefusedError):
+            sys.exit(0)
+
+    def write_log(self):
+        self.lock.acquire()
+        with open(logFile, 'a') as f:
+            f.write("This is log")
+        self.lock.release()
+
+    # 获取键盘输入内容
+    def keyboard_input(self):
+        while True:
+            input_content = input("")
+            # 先删除空格后找出第一个 如果是quit
+            if input_content.split()[0] == 'quit':
+                self.quit_function()  # 调用quit funciton进行graceful depart
+            elif input_content[0:7] == 'request':
+                try:
+                    filename = int(input_content[8:])
+                    if not 0 <= filename <= 9999:
+                        raise ValueError
+                    self.file_function(filename)
+                except ValueError:
+                    print('incorrect input: file number is not incorrect')
+            else:
+                print('incorrect input: input is not valid')
+
+
+if __name__ == "__main__":
+    peer = Peer_Class(int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5]))

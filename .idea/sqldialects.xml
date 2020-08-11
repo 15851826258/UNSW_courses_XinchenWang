@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SqlDialectMappings">
+    <file url="file://$PROJECT_DIR$/9311/9311Assignment1.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/9311/9311lab/9311lab3/createtable.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/9311/a2.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/COMP9318/9318 Lab/ass1" dialect="PostgreSQL" />
+  </component>
+</project>
